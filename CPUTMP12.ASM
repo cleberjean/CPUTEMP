@@ -1,35 +1,54 @@
-;Exibe a Temperatura de um Processador Intel com Sensor Digital de Temperatura.
-;Usa a instru‡„o RDMSR para obter a temperatura.
-;Funciona com processadores Intel Core 2 e mais novos.
-;Compile with "nasm cputemp.asm -o cputemp.com" or
+;------------------------------------------------------------------------------
+; Exibe a Temperatura de um Processador Intel com Sensor Digital de Temperatura.
+; Usa a instru‡„o RDMSR para obter a temperatura.
+; Funciona com processadores Intel Core 2 e mais novos.
+; By cleberjean@hotmail.com
+;
+; Compile with "nasm cputemp.asm -o cputemp.com" or
 ;             "fasm cputemp.asm cputemp.com" (BEWARE! May to produce instructions to 80386+)
-;By cleberjean@hotmail.com
-;02feb2024 - Fixed Core 2 Tjmax (105 -> 100 degrees)
-;24may2024 - Support for Processors with the IA32_TEMPERATURE_TARGET MSR   
-;22jun2024 - Support for Celeron J1800 Processor
-;26jun2024 - Check for RDMSR 0x1A2 first, to get Tjmax (default)
-;27jun2025 - Only shows version if something is typeded after program name
-;29jun2025 - Ignores Tab
-;22jul2025 - Meaningless change
-;20may2026 - Google Gemini's suggests applied
+;
+; History
+; -------
+;   02feb2024 - Fixed Core 2 Tjmax (105 -> 100 degrees)
+;   24may2024 - Support for Processors with the IA32_TEMPERATURE_TARGET MSR   
+;   22jun2024 - Support for Celeron J1800 Processor
+;   26jun2024 - Check for RDMSR 0x1A2 first, to get Tjmax (default)
+;   27jun2025 - Only shows version if something is typeded after program name
+;   29jun2025 - Ignores Tab
+;   22jul2025 - Meaningless change
+;   20may2026 - Google Gemini's suggests applied
+;   02jun2026 - Checking if interrupt 67h exists before check EMM386.EXE
+;               is loaded
+;   18jun2026 - Adds directives cpu 8086 and cpu 386 and adjusts on
+;               conditional branchs.
+;------------------------------------------------------------------------------
 
 
-
-;Defines
+;------------------------------------------------------------------------------
+; Defines
+;------------------------------------------------------------------------------
     IA32_THERM_STATUS_MSR  equ 0x19C
     IA32_TEMP_TARGET_MSR   equ 0x1A2
 
 
     org    100h              ; A .COM program
 
-begin:
+    cpu    8086              ; Nasm directive. Code below is for 8086 only.
+
+
+;------------------------------------------------------------------------------
+; Code Start
+;------------------------------------------------------------------------------
+Start:
     push   cs
     pop    ds                ; Certifies that Data Segment is the same of the program code (ES not used)
     cld                      ; SI/DI increments
     mov    si,0081h          ; Start of command line options
 
 
-;Checks Command Line
+;------------------------------------------------------------------------------
+; Checks Command Line
+;------------------------------------------------------------------------------
 Check_CR:    
     lodsb
     cmp    al,0Dh            ; Is a Carriage Return?
@@ -39,13 +58,15 @@ Check_CR:
     cmp    al,09h            ; Is a Tab?
     je     Check_CR          ; ...then continues to search for Carriage Return
 
-;Show Program Name and Version    
+; Show Program Name and Version    
     mov    dx,PROG_NAME
     mov    ah,09h
     int    21h
 
 
-;Gets Country Information
+;------------------------------------------------------------------------------
+; Gets Country Information
+;------------------------------------------------------------------------------
 Get_Country_Info:    
     mov    ax,3800h
     mov    dx,COUNTRY_INFO   ; NOT USED, BUT MUST HAVE THIS BUFFER!
@@ -53,27 +74,32 @@ Get_Country_Info:
     mov    [COUNTRY_CODE],bx ; Saves locale country code
 
 
-;O c¢digo abaixo foi retirado do Intel Pentium Processor User's Manual
-;Volume 3, Cap¡tulo 5.3 - SAMPLE CPUID IDENTIFICATION/FPU DETECTION CODE, 
-;p ginas 129 a 123, de 1993.
-;Example 5-1. CPU Identification and FPU Detection
-;Apenas o registrador CX foi trocado por BX
-;O coment rio original diz:
+;------------------------------------------------------------------------------
+; Checks Processor
+;
+; O code below was taken from Intel Pentium Processor User's Manual Volume 3,
+; Chapter 5.3 - SAMPLE CPUID IDENTIFICATION/FPU DETECTION CODE, pages 129 to
+; 123, from 1993.
+; Example 5-1. CPU Identification and FPU Detection
+; Only the CX register was changed to BX.
+; The original note says:
 ;       "This program has been developed by Intel Corporation. You have
 ;        Intel's permission to incorporate this source code into your
 ;        product royalty free."
 
 
-;Double check for 8086/8088.
-;Processors later of 8086 always pushes SP to stack, and then decrements 
-;SP by 2. 8086 always decrements SP by 2 and then pushes it on stack.
-;Also bits 12..15 are always set on the 8086 processor.
-;[MODIFIED] Test only bits 14 and 15, due a detection fail when in Priviligied Level != 0.
+; Double check for 8086/8088.
+; Processors later of 8086 always pushes SP to stack, and then decrements 
+; SP by 2. 8086 always decrements SP by 2 and then pushes it on stack.
+; Also bits 12..15 are always set on the 8086 processor.
+; [MODIFIED] Test only bits 14 and 15, due a detection fail when in 
+; Priviligied Level != 0.
+;------------------------------------------------------------------------------
 Check_8086:
     push   sp                ; Pushes SP
     pop    ax                ; Restore in AX
     sub    ax,sp             ; Clears AX if CPU is an 80286 or later
-    jnz    Bad_Proc          ; Processor is an 80186 or early
+    jnz    Chk_8086_Bad_Proc ; Processor is an 80186 or early
     pushf
     pop    bx                ; Save FLAGS in BX
     mov    ax,bx             ; Copy flags to AX
@@ -85,11 +111,18 @@ Check_8086:
 ;    and    ax,0F000h         ; Checks if bits 12..15 still always clean
 ;    jnz    Bad_Proc          ; Bits 12..15 do flags continuam setados (processador 8086/80186)
     and    ax,0C000h         ; Checks if bits 14 and 15 still always clean
-    jnz    Bad_Proc          ; Bits 14 and 15 from flags register remains set (processor is an 8086/80186)
+;    jnz    Bad_Proc          ; Bits 14 and 15 from flags register remains set (processor is an 8086/80186)
+    jz     Check_Ring0       ; Checks for Real Mode (Privilege Level 0)
+    
+Chk_8086_Bad_Proc:    
+    jmp    Bad_Proc          ; Bits 14 and 15 from flags register remains set (processor is an 8086/80186)
 
 
-;Checks Ring 0 (https://en.wikipedia.org/wiki/Protection_ring#IOPL)
-;RDMSR instruction MUST BE used in Priviligied Level 0 ONLY!
+;------------------------------------------------------------------------------
+; Checks Ring 0 (https://en.wikipedia.org/wiki/Protection_ring#IOPL)
+; (RDMSR instruction MUST BE used in Priviligied Level 0 ONLY!)
+;------------------------------------------------------------------------------
+Check_Ring0:
     mov    ax,bx
     and    ax,0FFFh
     push   ax
@@ -97,12 +130,15 @@ Check_8086:
     pushf
     pop    ax
     and    ah,30h            ; If 0 then system in Ring 0 (Real mode)
-    jnz    Test_EMM386
+    jz     Check_286         ; Processor is in Real Mode
+    jmp    Test_EMM386       ; Checks if EMM386 is present
+
     
-    
-;Intel 286 CPU Check
-;Bits 12-15 are always clear on the Intel 286 processor.
-Check_80286:
+;------------------------------------------------------------------------------
+; Intel 286 CPU Check
+; Bits 12-15 are always clear on the Intel 286 processor.
+;------------------------------------------------------------------------------
+Check_286:
     mov    ax,bx             ; Copy flags to AX
     or     ax,0F000h         ; Set bits 12..15
     push   ax
@@ -110,18 +146,24 @@ Check_80286:
     pushf
     pop    ax
     and    ax,0F000h         ; If bits 12..15 are cleared, then CPU=80286
-    jz     Bad_Proc          ; CPU is an 80286
+;    jz     Bad_Proc          ; CPU is an 80286
+    jnz    Check_386         ; CPU is not an 80286
+    jmp    Bad_Proc          ; CPU is an 80286
 
 
          ;--------------------------------------------------------;
          ; Starting here, now is safe to use 32 bits instructions ;
          ;--------------------------------------------------------;
 
-;Intel386 CPU Check
-;The AC bit, bit #18, is a new bit introduced in the EFLAGS
-;register on the Intel486 DX CPU to generate alignment faults.
-;This bit can not be set on the Intel386 CPU.
-Check_80386:
+;------------------------------------------------------------------------------
+; Intel386 CPU Check
+; The AC bit, bit #18, is a new bit introduced in the EFLAGS
+; register on the Intel486 DX CPU to generate alignment faults.
+; This bit can not be set on the Intel386 CPU.
+;------------------------------------------------------------------------------
+    cpu    386               ; Nasm directive. Code below is for 386 until 486.
+
+Check_386:
     push   bx
     popf                     ; Restore original FLAGS
     pushfd
@@ -137,7 +179,7 @@ Check_80386:
     jz     Bad_Proc          ; CPU is an 80386
     
 
-Check_80486:
+Check_486:
     mov    eax,ebx           ; Copy original EFLAGS to EAX
     xor    eax,200000h       ; Flip ID bit in EFLAGS
     push   eax
@@ -148,11 +190,18 @@ Check_80486:
     jz     Bad_Proc          ; If ID bit cannot be changed, CPU=80486
                              ; without CPUID instruction functionality
 
-;For safety only, restores original EFLAGS (is not on original source code)  
+;------------------------------------------------------------------------------
+; For safety only, restores original EFLAGS (is not on original source code)  
+;------------------------------------------------------------------------------
     push   ebx
     popfd
 
-;Now is safe to use the CPUID instruction to get processor features   
+
+;------------------------------------------------------------------------------
+; Now is safe to use the CPUID instruction to get processor features   
+;------------------------------------------------------------------------------
+    cpu    586               ; Nasm directive. Code below is for 486 or newer.
+
     xor    eax,eax           ; EAX = 0
     cpuid
     cmp    bl,'G'            ; Testa o "G" da string "GenuineIntel"
@@ -180,7 +229,10 @@ Check_80486:
     jne    Bad_Proc
     
 
-;Check for RDMSR 0x1A2 availability and Get Tjmax from processors with the IA32_TEMPERATURE_TARGET MSR if OK
+;------------------------------------------------------------------------------
+; Check for RDMSR 0x1A2 availability and Get Tjmax from processors with the 
+; IA32_TEMPERATURE_TARGET MSR if OK
+;------------------------------------------------------------------------------
     xor    eax,eax           ; initialize EAX (clears garbage)
     mov    ecx,IA32_TEMP_TARGET_MSR
     rdmsr                    ; gets the processor Tjmax (0x1A2 MSR)
@@ -195,7 +247,9 @@ Check_80486:
     jmp    Load_Temp_Msg 
 
 
-;Processor type checking and Tjmax selection (if RDMSR 0x1A2 do not work)
+;------------------------------------------------------------------------------
+; Processor type checking and Tjmax selection (if RDMSR 0x1A2 do not work)
+;------------------------------------------------------------------------------
 Select_Tjmax:    
     pop    eax               ; Restores EAX from CPUID leaf 1
     shr    eax,4
@@ -214,61 +268,86 @@ Select_Tjmax:
     je     Load_Temp_Msg     ; Yes
 
 
-;Unknown processor or not supported
+;------------------------------------------------------------------------------
+; Unknown processor or not supported
+;------------------------------------------------------------------------------
 Bad_Proc:    
     mov    dx,BAD_PROC_MSG_BR
     mov    ax,[COUNTRY_CODE]
     cmp    ax,55                ; DOS in brazilian portuguese?
-    je     Show_Info            ; Yes. Then show message in brazilian portuguese
-    mov    dx,BAD_PROC_MSG_EN
+    je     Show_Info_Bad_Proc   ; Yes. Then show message in brazilian portuguese
+    mov    dx,BAD_PROC_MSG_EN   ; Otherwise show it in english
+
+Show_Info_Bad_Proc:
     jmp    Show_Info
     
 
-;Processor not has a Digital Thermal Sensor
+;------------------------------------------------------------------------------
+; Processor not has a Digital Thermal Sensor
+;------------------------------------------------------------------------------
 CPUID_No_DTS:
     mov    dx,NO_DTS_MSG_BR
     mov    ax,[COUNTRY_CODE]
     cmp    ax,55                ; DOS in brazilian portuguese?
-    je     Show_Info            ; Yes. Then show message in brazilian portuguese
-    mov    dx,NO_DTS_MSG_EN
+    je     Show_Info_No_DTS     ; Yes. Then show message in brazilian portuguese
+    mov    dx,NO_DTS_MSG_EN     ; Otherwise show it in english
+
+Show_Info_No_DTS:
     jmp    Show_Info
 
 
-;Processor is not an Intel
+;------------------------------------------------------------------------------
+; Processor is not an Intel
+;------------------------------------------------------------------------------
 Non_Intel:
     mov    dx,INTEL_ONLY_MSG_BR
     mov    ax,[COUNTRY_CODE]
     cmp    ax,55                ; DOS in brazilian portuguese?
-    je     Show_Info            ; Yes. Then show message in brazilian portuguese
-    mov    dx,INTEL_ONLY_MSG_EN
+    je     Show_Info_Non_Intel  ; Yes. Then show message in brazilian portuguese
+    mov    dx,INTEL_ONLY_MSG_EN ; Otherwise show it in english
+
+Show_Info_Non_Intel:
     jmp    Show_Info
 
 
-;System is in protected mode (EMM386.EXE loaded or Windows in Enhanced Mode)
-;RDMSR instruction in Ring 0 ONLY!
+;------------------------------------------------------------------------------
+; System is in protected mode (EMM386.EXE loaded or Windows in Enhanced Mode)
+; RDMSR instruction in Ring 0 ONLY!
+;------------------------------------------------------------------------------
 Test_EMM386:
+    mov    ax,3567h
+    int    21h
+    mov    ax,es
+    or     ax,bx
+    jz     Priv_Level_Is_Not_0
     mov    ax,0FFA5h
     mov    dx,0FFFFh
     int    67h
     cmp    ax,845Ah             ; is EMM386.EXE loaded?
-    jne    Priv_Level_Not_0     ; no
+    jne    Priv_Level_Is_Not_0  ; no
     mov    dx,EMM386_MSG_BR
     mov    ax,[COUNTRY_CODE]
     cmp    ax,55                ; DOS in brazilian portuguese?
-    je     Show_Info            ; Yes. Then show message in brazilian portuguese
-    mov    dx,EMM386_MSG_EN     ; otherwise show in english
+    je     Show_Info_EMM386     ; Yes. Then show message in brazilian portuguese
+    mov    dx,EMM386_MSG_EN     ; Otherwise show it in english
+
+Show_Info_EMM386:
     jmp    Show_Info
 
-Priv_Level_Not_0:    
+Priv_Level_Is_Not_0:    
     mov    dx,PRIV_LEVEL_MSG_BR
     mov    ax,[COUNTRY_CODE]
     cmp    ax,55                ; DOS in brazilian portuguese?
-    je     Show_Info            ; Yes. Then show message in brazilian portuguese
-    mov    dx,PRIV_LEVEL_MSG_EN
+    je     Show_Info_Priv_Level ; Yes. Then show message in brazilian portuguese
+    mov    dx,PRIV_LEVEL_MSG_EN ; Otherwise show it in english
+
+Show_Info_Priv_Level:
     jmp    Show_Info
     
         
-;Loads locale language temperature message
+;------------------------------------------------------------------------------
+; Loads locale language temperature message
+;------------------------------------------------------------------------------
 Load_Temp_Msg:
     mov    di,TEMP_ASCII_BR     ; Temperature address inside of portuguese phrase buffer
     mov    ax,[COUNTRY_CODE]
@@ -276,11 +355,18 @@ Load_Temp_Msg:
     je     Init_Retries_Counter ; Yes. Then maintains the address inside of portuguese phrase
     mov    di,TEMP_ASCII_EN     ; Temperature address inside of english phrase buffer
     
-;Init the temperature Reading Retries Counter
+
+;------------------------------------------------------------------------------
+; Init the temperature Reading Retries Counter
+;------------------------------------------------------------------------------
 Init_Retries_Counter:    
-    mov    cx,1000h             ; # of reading retries if the temperature on MSR is invalid
-                                ; Suggest from Google Gemini (19may2026)
-;Gets temperature
+    mov    cx,1000h             ; # of reading retries if the temperature on
+                                ; MSR is invalid.
+                                ; (Suggest from Google Gemini in 19may2026)
+
+;------------------------------------------------------------------------------
+; Gets the temperature
+;------------------------------------------------------------------------------
 Get_Temp:    
     push   cx                   ; preserves Reading Retries Counter
     mov    ecx,IA32_THERM_STATUS_MSR  ; 0x19C MSR
@@ -291,13 +377,19 @@ Get_Temp:
     jnz    Temp_Reading_Is_OK   ; EAX bit 31 = 1, then temperature reading is valid
     loop   Get_Temp             ; retries to read the temperature
     
-;Cannot to read the temperature    
+
+;------------------------------------------------------------------------------
+; Can not to read the temperature    
+;------------------------------------------------------------------------------
     mov    dx,TEMP_ERROR_MSG_BR ; Preloads brazilian portuguese error message (default)
     mov    ax,[COUNTRY_CODE]
     cmp    ax,55                ; DOS in brazilian portuguese?
-    je     Show_Info            ; Yes. Then show message in brazilian portuguese
-    mov    dx,TEMP_ERROR_MSG_EN ; No. Show message in english language
+    je     Show_Info_Temp_Error ; Yes. Then show message in brazilian portuguese
+    mov    dx,TEMP_ERROR_MSG_EN ; Otherwise show it in english
+
+Show_Info_Temp_Error:
     jmp    Show_Info            ; Show error message and exit to DOS
+
 
 Temp_Reading_Is_OK:
 ;    and    ax,7Fh
@@ -314,7 +406,9 @@ Temp_Reading_Is_OK:
     sub    al,100               ; Gets ten and unit of temperature
 
 
-;Converts temperature value into an ASCII sequence
+;------------------------------------------------------------------------------
+; Converts temperature value into an ASCII sequence
+;------------------------------------------------------------------------------
 Bin2ASCII:
     aam                         ; Converts AL value (max. 99) to BCD
     add    ax,3030h             ; Converts BCD para ASCII
@@ -333,12 +427,14 @@ Bin2ASCII:
     stosb
     
 
-;Shows the temperature information    
+;------------------------------------------------------------------------------
+; Shows the temperature information    
+;------------------------------------------------------------------------------
     mov    dx,TEMP_MSG_BR
     mov    ax,[COUNTRY_CODE]
     cmp    ax,55                ; DOS in brazilian portuguese?
     je     Show_Info            ; Yes. Then show message in brazilian portuguese
-    mov    dx,TEMP_MSG_EN       ; No. Show message in english language
+    mov    dx,TEMP_MSG_EN       ; Otherwise show it in english
     
 
 Show_Info:    
@@ -347,18 +443,24 @@ Show_Info:
     int    20h                  ; Back to DOS
 
 
-;Tjmax para ser somado … temperatura lida
+;------------------------------------------------------------------------------
+; Tjmax para ser somado … temperatura lida
+;------------------------------------------------------------------------------
 TJMAX              db 100       ; Tjmax for Core 2/i3/i5/i7 processors (default)
 
 
-;Locale Information
+;------------------------------------------------------------------------------
+; Locale Information
+;------------------------------------------------------------------------------
 COUNTRY_CODE       dw 55        ; Locale country code (55 = Brazil)
 COUNTRY_INFO       dw 0,0,0,0,0,0,0,0,0,0,0,0 ; (REQUIRED) this buffer must be 24 bytes!
 
 
-;Brazilian Portuguese Messages
-TEMP_MSG_BR         db 0Dh,0Ah,'A temperatura do processador ‚ '
-TEMP_ASCII_BR      db '$$$$$$$$$' ;<---<<< MUST CONTAIN 9 BYTES!
+;------------------------------------------------------------------------------
+; Brazilian Portuguese Messages
+;------------------------------------------------------------------------------
+TEMP_MSG_BR        db 0Dh,0Ah,'A temperatura do processador ‚ '
+TEMP_ASCII_BR      db '$$$$$$$$$' ;<---<<< MUST CONTAIN 9 DOLLAR CHARACTERS!
 BAD_PROC_MSG_BR    db 0Dh,0Ah,'Este processador n„o ‚ suportado!',0Dh,0Ah,'$'
 NO_DTS_MSG_BR      db 0Dh,0Ah,'[CPUID] Processador sem um "Digital Thermal Sensor"!',0Dh,0Ah,'$'
 INTEL_ONLY_MSG_BR  db 0Dh,0Ah,'Suporte somente para processadores Intel Core 2 ou mais novos, nesta vers„o.',0Dh,0Ah,'$'
@@ -367,7 +469,9 @@ EMM386_MSG_BR      db 0Dh,0Ah,'[CPUTEMP] N„o ‚ poss¡vel ler a temperatura com o 
 TEMP_ERROR_MSG_BR  db 0Dh,0Ah,'[RDMSR] N„o foi poss¡vel ler a temperatura do processador!',0Dh,0Ah,'$'
 
 
-;English Messages
+;------------------------------------------------------------------------------
+; English Messages
+;------------------------------------------------------------------------------
 TEMP_MSG_EN        db 0Dh,0Ah,'The processor temperature is '
 TEMP_ASCII_EN      db '$$$$$$$$$' ;<---<<< MUST CONTAIN 9 DOLLAR CHARACTERS!
 BAD_PROC_MSG_EN    db 0Dh,0Ah,'Unsupported processor!',0Dh,0Ah,'$'
@@ -378,9 +482,15 @@ EMM386_MSG_EN      db 0Dh,0Ah,'[CPUTEMP] Cannot read the temperature with EMM386
 TEMP_ERROR_MSG_EN  db 0Dh,0Ah,"[RDMSR] Cannot read the processor temperature!",0Dh,0Ah,"$"
 
 
-;Program Version and Date Revision to Show
-PROG_NAME          db 0Dh,0Ah,'CPUTemp 1.12 [20may2026]',0Dh,0Ah,'========================',0Dh,0Ah,'$'
+;------------------------------------------------------------------------------
+; Program Version and Date Revision to Show
+;------------------------------------------------------------------------------
+PROG_NAME          db 0Dh,0Ah,'CPUTemp 1.12.2 [18jun2026]', \
+                      0Dh,0Ah,'==========================',0Dh,0Ah,'$'
 
-;Version Signature
-VER                db '___[Ver. 20may2026]___'
+
+;------------------------------------------------------------------------------
+; File Version Signature
+;------------------------------------------------------------------------------
+FILE_VER           db '___[Ver. 18jun2026]___'
 
